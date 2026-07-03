@@ -1,0 +1,6 @@
+{
+  "name": "ELDORET FUNITURE",
+  "description": "Premium advertising catalog and showroom website for Eldoret Funiture in Kenya. Fully responsive with 100+ bespoke beds, sofas, tables, dining sets, shoe racks, TV stands, and kitchen cabinets.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

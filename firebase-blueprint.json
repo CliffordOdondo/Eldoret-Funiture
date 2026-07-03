@@ -1,0 +1,87 @@
+{
+  "entities": {
+    "CustomProduct": {
+      "title": "CustomProduct",
+      "description": "A custom product added by the client/owner that gets persisted in the showroom database",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Unique identifier of the product"
+        },
+        "name": {
+          "type": "string",
+          "description": "Name of the custom product"
+        },
+        "category": {
+          "type": "string",
+          "description": "The product category",
+          "enum": ["beds", "sofas", "tables", "dining", "shoeracks", "tvstands", "kitchen"]
+        },
+        "price": {
+          "type": "number",
+          "description": "Price in Kenyan Shillings (KSh)"
+        },
+        "description": {
+          "type": "string",
+          "description": "A short elegant description of the product"
+        },
+        "image": {
+          "type": "string",
+          "description": "Base64 string or image URL for the product image"
+        },
+        "dimensions": {
+          "type": "string",
+          "description": "Dimensions of the product (e.g. 150cm x 90cm)"
+        },
+        "materials": {
+          "type": "array",
+          "description": "List of materials used"
+        },
+        "isChester": {
+          "type": "boolean",
+          "description": "True if the product is Chesterfield/tufted style"
+        },
+        "woodOnly": {
+          "type": "boolean",
+          "description": "True if the product is solid wood only"
+        },
+        "features": {
+          "type": "array",
+          "description": "Custom highlights or specifications"
+        },
+        "createdAt": {
+          "type": "number",
+          "description": "Timestamp when the product was created"
+        }
+      },
+      "required": ["id", "name", "category", "price", "description", "image", "dimensions"]
+    },
+    "AdminSettings": {
+      "title": "AdminSettings",
+      "description": "Settings for the shop manager admin portal, such as custom passcode",
+      "type": "object",
+      "properties": {
+        "passcode": {
+          "type": "string",
+          "description": "The passcode required to unlock the admin showroom manager"
+        }
+      },
+      "required": ["passcode"]
+    }
+  },
+  "firestore": {
+    "products/{productId}": {
+      "schema": {
+        "$ref": "#/entities/CustomProduct"
+      },
+      "description": "Collection of custom-added products created by the shop manager"
+    },
+    "settings/{settingId}": {
+      "schema": {
+        "$ref": "#/entities/AdminSettings"
+      },
+      "description": "Collection of settings documents for app configuration"
+    }
+  }
+}

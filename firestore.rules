@@ -1,0 +1,60 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // 1. Global Safety Net
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Helper functions
+    function isValidId(id) {
+      return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function isValidProduct(productId) {
+      return isValidId(productId)
+        && incoming().id == productId
+        && incoming().name is string && incoming().name.size() > 0 && incoming().name.size() <= 150
+        && incoming().category is string && incoming().category.size() <= 50
+        && incoming().price is number && incoming().price >= 0
+        && incoming().description is string && incoming().description.size() <= 1500
+        && incoming().image is string // Document size is naturally limited to 1MB by Firestore anyway
+        && incoming().dimensions is string && incoming().dimensions.size() <= 150
+        && incoming().materials is list && incoming().materials.size() <= 30
+        && incoming().features is list && incoming().features.size() <= 30
+        && (!('isChester' in incoming()) || incoming().isChester is bool)
+        && (!('woodOnly' in incoming()) || incoming().woodOnly is bool)
+        && (!('createdAt' in incoming()) || incoming().createdAt is number);
+    }
+
+    // 2. Products collection rules
+    match /products/{productId} {
+      allow read: if true;
+      allow create, update: if isValidProduct(productId);
+      allow delete: if isValidId(productId);
+    }
+
+    // 3. Hidden products collection rules
+    match /hidden_products/{productId} {
+      allow read: if true;
+      allow write: if isValidId(productId);
+    }
+
+    // Validation for settings documents
+    function isValidSetting(settingId) {
+      return isValidId(settingId)
+        && incoming().passcode is string && incoming().passcode.size() >= 4 && incoming().passcode.size() <= 100;
+    }
+
+    // 4. Settings collection rules
+    match /settings/{settingId} {
+      allow read: if true;
+      allow create, update: if isValidSetting(settingId);
+      allow delete: if false;
+    }
+  }
+}
