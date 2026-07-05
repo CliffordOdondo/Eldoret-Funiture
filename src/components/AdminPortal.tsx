@@ -30,6 +30,7 @@ interface AdminPortalProps {
   hiddenProducts?: Product[];
   onRestoreProduct?: (id: string) => void;
   onPermanentlyDeleteStandardProduct?: (id: string) => void;
+  onAddCustomProduct?: (product: Product) => void;
 }
 
 export default function AdminPortal({ 
@@ -41,15 +42,18 @@ export default function AdminPortal({
   setIsAdminAuthenticated,
   hiddenProducts = [],
   onRestoreProduct,
-  onPermanentlyDeleteStandardProduct
+  onPermanentlyDeleteStandardProduct,
+  onAddCustomProduct
 }: AdminPortalProps) {
   const [passcode, setPasscode] = useState<string>('');
+  const [showLoginPasscode, setShowLoginPasscode] = useState<boolean>(false);
   const [authError, setAuthError] = useState<string>('');
   const isAuthenticated = isAdminAuthenticated;
   const setIsAuthenticated = setIsAdminAuthenticated;
   
   // Custom settings (passcode changing) states
   const [dbPasscode, setDbPasscode] = useState<string | null>(null);
+  const [isSettingsLoaded, setIsSettingsLoaded] = useState<boolean>(false);
   const [newPasscode, setNewPasscode] = useState<string>('');
   const [confirmPasscode, setConfirmPasscode] = useState<string>('');
   const [showPasscodeToggle, setShowPasscodeToggle] = useState<boolean>(false);
@@ -65,13 +69,31 @@ export default function AdminPortal({
         const data = docSnap.data();
         if (data && typeof data.passcode === 'string') {
           setDbPasscode(data.passcode);
+        } else {
+          setDbPasscode(null);
         }
+      } else {
+        setDbPasscode(null);
       }
+      setIsSettingsLoaded(true);
     }, (error) => {
       console.warn("Error subscribing to settings passcode:", error);
+      setIsSettingsLoaded(true);
     });
     return () => unsubscribe();
   }, [isOpen]);
+
+  // Reset inputs and errors when modal is opened/closed or user logs out
+  useEffect(() => {
+    setPasscode('');
+    setAuthError('');
+    setShowLoginPasscode(false);
+    setNewPasscode('');
+    setConfirmPasscode('');
+    setChangePassError('');
+    setChangePassSuccess('');
+    setShowPasscodeToggle(false);
+  }, [isOpen, isAdminAuthenticated]);
 
   // Handles changing the passcode
   const handleChangePasscode = async (e?: React.FormEvent) => {
@@ -140,9 +162,9 @@ export default function AdminPortal({
   const handleAuthSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     // Compare against the database passcode (if configured), or fall back to default passcodes "1234" and "eldoret2026"
-    const isMatched = (dbPasscode && passcode === dbPasscode) || 
-                      passcode === '1234' || 
-                      passcode.toLowerCase() === 'eldoret2026';
+    const isMatched = (isSettingsLoaded && dbPasscode)
+      ? passcode === dbPasscode
+      : (passcode === '1234' || passcode.toLowerCase() === 'eldoret2026');
                       
     if (isMatched) {
       setIsAuthenticated(true);
@@ -150,6 +172,7 @@ export default function AdminPortal({
         localStorage.setItem('eldoret_owner_authenticated', 'true');
       }
       setAuthError('');
+      setPasscode(''); // Clear passcode on successful login
     } else {
       setAuthError('Incorrect passcode. Please check and try again.');
     }
@@ -337,7 +360,7 @@ export default function AdminPortal({
       }
 
       // Write to Firestore products collection
-      await setDoc(doc(db, 'products', customId), {
+      const newProduct: Product = {
         id: customId,
         name: name.trim(),
         category,
@@ -350,7 +373,26 @@ export default function AdminPortal({
         isChester,
         woodOnly,
         createdAt: timestamp
+      };
+
+      await setDoc(doc(db, 'products', customId), {
+        id: customId,
+        name: newProduct.name,
+        category: newProduct.category,
+        price: newProduct.price,
+        description: newProduct.description,
+        image: newProduct.image,
+        dimensions: newProduct.dimensions,
+        materials: newProduct.materials,
+        features: newProduct.features,
+        isChester: newProduct.isChester,
+        woodOnly: newProduct.woodOnly,
+        createdAt: timestamp
       });
+
+      if (onAddCustomProduct) {
+        onAddCustomProduct(newProduct);
+      }
 
       setFormSuccess(`Successfully posted "${name}" to the showroom!${autoGenerateAI ? ' ✨ AI-researched details have been added automatically.' : ''}`);
       
@@ -413,20 +455,31 @@ export default function AdminPortal({
               <div className="space-y-2">
                 <h3 className="text-lg font-bold text-stone-900">Enter Access Passcode</h3>
                 <p className="text-xs text-stone-500 leading-relaxed">
-                  To protect your website, adding new products is restricted. Please enter the workshop owner passcode (hint: use <strong>1234</strong> or <strong>eldoret2026</strong>).
+                  To protect your website, adding new products is restricted. Please enter the workshop owner passcode.
                 </p>
               </div>
 
               <form onSubmit={handleAuthSubmit} className="space-y-4">
-                <input
-                  type="password"
-                  placeholder="Owner Passcode"
-                  value={passcode}
-                  onChange={(e) => setPasscode(e.target.value)}
-                  className="w-full text-center px-4 py-3 border border-stone-300 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-amber-500 font-mono tracking-widest bg-stone-50"
-                  autoFocus
-                  id="admin-passcode-input"
-                />
+                <div className="relative">
+                  <input
+                    type={showLoginPasscode ? "text" : "password"}
+                    placeholder="Owner Passcode"
+                    value={passcode}
+                    onChange={(e) => setPasscode(e.target.value)}
+                    className="w-full text-center pl-12 pr-12 py-3 border border-stone-300 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-amber-500 font-mono tracking-widest bg-stone-50"
+                    autoFocus
+                    id="admin-passcode-input"
+                    autoComplete="new-password"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowLoginPasscode(!showLoginPasscode)}
+                    className="absolute right-3.5 top-1/2 -translate-y-1/2 p-1.5 text-stone-400 hover:text-stone-700 transition-colors cursor-pointer"
+                    title={showLoginPasscode ? "Hide passcode" : "Show passcode"}
+                  >
+                    {showLoginPasscode ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                  </button>
+                </div>
                 
                 {authError && (
                   <div className="text-red-600 text-xs flex items-center justify-center gap-1 bg-red-50 p-2.5 rounded-lg border border-red-200">

@@ -67,12 +67,27 @@ export default function ProductModal({ product, onClose }: ProductModalProps) {
 
   // Compile full custom WhatsApp order details
   const getWhatsAppInquiryUrl = () => {
+    const getAbsoluteImageUrl = (img: string) => {
+      if (!img || img.startsWith('data:') || img.startsWith('blob:') || img.length > 500) return '';
+      if (img.startsWith('http://') || img.startsWith('https://')) return img;
+      return `https://eldoret-funiture.onrender.com${img.startsWith('/') ? '' : '/'}${img}`;
+    };
+
+    const liveLink = `https://eldoret-funiture.onrender.com?product=${product.id}`;
+    const imageUrl = getAbsoluteImageUrl(product.image);
+    const priceText = product.price && product.price > 0 ? formatPrice(product.price) : "Bespoke Pricing Upon Request";
+
     let message = `Hello ELDORET FUNITURE! I am inquiring about one of your custom furniture items from your website:\n\n`;
     message += `📋 ITEM INQUIRY DETAILS:\n`;
     message += `-------------------------\n`;
     message += `• Product: ${product.name}\n`;
+    message += `• Price: ${priceText}\n`;
     message += `• Standard Dimensions: ${product.dimensions}\n`;
-    message += `• Item Reference: ${product.id}\n\n`;
+    message += `• Item Reference: ${product.id}\n`;
+    if (imageUrl) {
+      message += `• Product Image: ${imageUrl}\n`;
+    }
+    message += `• Product Link: ${liveLink}\n\n`;
 
     message += `🛠️ MY CHOSEN CUSTOMISATIONS:\n`;
     message += `-------------------------\n`;
@@ -159,7 +174,7 @@ export default function ProductModal({ product, onClose }: ProductModalProps) {
               </h2>
               <div className="flex items-baseline gap-2.5 mt-2.5">
                 <span className="text-lg font-bold text-amber-900 font-sans">
-                  Bespoke Pricing Upon Request
+                  {product.price && product.price > 0 ? formatPrice(product.price) : 'Bespoke Pricing Upon Request'}
                 </span>
               </div>
             </div>

@@ -48,11 +48,24 @@ export default function ProductCard({
 
   // Generate customized WhatsApp text for dynamic click through
   const getWhatsAppLink = (p: Product) => {
+    const getAbsoluteImageUrl = (img: string) => {
+      if (!img || img.startsWith('data:') || img.startsWith('blob:') || img.length > 500) return '';
+      if (img.startsWith('http://') || img.startsWith('https://')) return img;
+      return `https://eldoret-funiture.onrender.com${img.startsWith('/') ? '' : '/'}${img}`;
+    };
+
+    const liveLink = `https://eldoret-funiture.onrender.com?product=${p.id}`;
+    const priceText = p.price && p.price > 0 ? formatPrice(p.price) : "Enquire for bespoke price";
+    const imageUrl = getAbsoluteImageUrl(p.image);
+
     const text = encodeURIComponent(
       `Hello ELDORET FUNITURE! I am visiting your website showroom and I would like to inquire about the following item:\n\n` +
       `Product Name: ${p.name}\n` +
       `Item Code: ${p.id}\n` +
-      `Dimensions: ${p.dimensions || "Customizable (Built to Order)"}\n\n` +
+      `Price: ${priceText}\n` +
+      `Dimensions: ${p.dimensions || "Customizable (Built to Order)"}\n` +
+      (imageUrl ? `Product Image: ${imageUrl}\n` : '') +
+      `Product Link: ${liveLink}\n\n` +
       `Is this item available? Do you deliver to my location and what is the bespoke price?`
     );
     return `https://wa.me/254711507064?text=${text}`;
@@ -218,7 +231,7 @@ export default function ProductCard({
           <div className="flex flex-col">
             <span className="text-xxs uppercase font-bold tracking-widest text-stone-400 font-mono">Bespoke pricing</span>
             <span className="text-sm font-bold text-amber-900 font-sans tracking-tight">
-              Enquire for Price
+              {product.price && product.price > 0 ? formatPrice(product.price) : 'Enquire for Price'}
             </span>
           </div>
 

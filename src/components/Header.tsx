@@ -107,7 +107,7 @@ export default function Header({
             Our Process
           </button>
           <button 
-            onClick={() => { window.scrollTo({ top: document.documentElement.scrollHeight, behavior: 'smooth' }) }} 
+            onClick={() => { document.getElementById('contact-us')?.scrollIntoView({ behavior: 'smooth', block: 'start' }) }} 
             className="hover:text-amber-700 transition-all cursor-pointer relative py-1 after:content-[''] after:absolute after:bottom-0 after:left-0 after:w-0 after:h-0.5 after:bg-amber-700 hover:after:w-full after:transition-all"
             id="nav-link-contact"
           >
@@ -188,7 +188,7 @@ export default function Header({
           Process
         </button>
         <button 
-          onClick={() => { window.scrollTo({ top: document.documentElement.scrollHeight, behavior: 'smooth' }) }} 
+          onClick={() => { document.getElementById('contact-us')?.scrollIntoView({ behavior: 'smooth', block: 'start' }) }} 
           className="hover:text-amber-800 active:text-amber-800 transition-colors cursor-pointer"
           id="mobile-nav-contact"
         >

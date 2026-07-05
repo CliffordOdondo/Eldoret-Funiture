@@ -15,6 +15,7 @@ export interface Product {
   isChester?: boolean; // Chester bed / Sofa
   woodOnly?: boolean; // Solid wood only, no upholstery
   features: string[];
+  createdAt?: number;
 }
 
 export interface CategoryInfo {

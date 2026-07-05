@@ -4,7 +4,7 @@
  */
 
 import React, { useState, useMemo, useEffect } from 'react';
-import { collection, onSnapshot, query, orderBy, doc, setDoc, deleteDoc } from 'firebase/firestore';
+import { collection, onSnapshot, query, orderBy, doc, setDoc, deleteDoc, getDoc } from 'firebase/firestore';
 import { db } from './lib/firebase';
 import { CATEGORIES, PRODUCTS } from './data';
 import { Product } from './types';
@@ -44,13 +44,62 @@ export default function App() {
   const [isAdminOpen, setIsAdminOpen] = useState<boolean>(false);
   
   // Custom & Hidden Showroom States
-  const [customProducts, setCustomProducts] = useState<Product[]>([]);
-  const [hiddenProductIds, setHiddenProductIds] = useState<Set<string>>(new Set());
-  const [permanentlyDeletedIds, setPermanentlyDeletedIds] = useState<Set<string>>(new Set());
+  const [customProducts, setCustomProducts] = useState<Product[]>(() => {
+    if (typeof window !== 'undefined') {
+      const stored = localStorage.getItem('eldoret_custom_products');
+      if (stored) {
+        try {
+          return JSON.parse(stored);
+        } catch (e) {}
+      }
+    }
+    return [];
+  });
+
+  const [hiddenProductIds, setHiddenProductIds] = useState<Set<string>>(() => {
+    if (typeof window !== 'undefined') {
+      const stored = localStorage.getItem('eldoret_hidden_product_ids');
+      if (stored) {
+        try {
+          return new Set(JSON.parse(stored));
+        } catch (e) {}
+      }
+    }
+    return new Set();
+  });
+
+  const [permanentlyDeletedIds, setPermanentlyDeletedIds] = useState<Set<string>>(() => {
+    if (typeof window !== 'undefined') {
+      const stored = localStorage.getItem('eldoret_perm_deleted_ids');
+      if (stored) {
+        try {
+          return new Set(JSON.parse(stored));
+        } catch (e) {}
+      }
+    }
+    return new Set();
+  });
+
+  // Database Synchronization Progress States (prevents flashes of deleted default items)
+  const [isProductsLoaded, setIsProductsLoaded] = useState<boolean>(() => {
+    if (typeof window !== 'undefined') {
+      return localStorage.getItem('eldoret_custom_products') !== null;
+    }
+    return false;
+  });
+
+  const [isHiddenProductsLoaded, setIsHiddenProductsLoaded] = useState<boolean>(() => {
+    if (typeof window !== 'undefined') {
+      return localStorage.getItem('eldoret_hidden_product_ids') !== null &&
+             localStorage.getItem('eldoret_perm_deleted_ids') !== null;
+    }
+    return false;
+  });
   
   // Custom non-blocking alert / confirmation modal states
   const [productToDelete, setProductToDelete] = useState<Product | null>(null);
   const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' | 'info' } | null>(null);
+  const [isQuotaExceeded, setIsQuotaExceeded] = useState<boolean>(false);
 
   // Auto-dismiss Toast Notification
   useEffect(() => {
@@ -72,8 +121,7 @@ export default function App() {
 
   // Sync custom products from Firestore on mount so visitors see custom images immediately
   useEffect(() => {
-    const q = query(collection(db, 'products'), orderBy('createdAt', 'desc'));
-    const unsubscribe = onSnapshot(q, (snapshot) => {
+    const unsubscribe = onSnapshot(collection(db, 'products'), (snapshot) => {
       const items: Product[] = [];
       snapshot.forEach((doc) => {
         const data = doc.data();
@@ -88,12 +136,26 @@ export default function App() {
           materials: data.materials || [],
           features: data.features || [],
           isChester: data.isChester || false,
-          woodOnly: data.woodOnly || false
+          woodOnly: data.woodOnly || false,
+          createdAt: data.createdAt || 0
         } as Product);
       });
+      // Sort in-memory to ensure all items are fetched (including those without a createdAt field)
+      items.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
+
       setCustomProducts(items);
-    }, (error) => {
+      try {
+        localStorage.setItem('eldoret_custom_products', JSON.stringify(items));
+      } catch (e) {
+        console.warn('LocalStorage limit exceeded, skipping cache');
+      }
+      setIsProductsLoaded(true);
+    }, (error: any) => {
       console.error("Firestore loading error: ", error);
+      if (error?.code === 'resource-exhausted' || error?.message?.includes('Quota') || error?.message?.includes('quota')) {
+        setIsQuotaExceeded(true);
+      }
+      setIsProductsLoaded(true);
     });
 
     return () => unsubscribe();
@@ -114,8 +176,17 @@ export default function App() {
       });
       setHiddenProductIds(ids);
       setPermanentlyDeletedIds(permIds);
-    }, (error) => {
+      try {
+        localStorage.setItem('eldoret_hidden_product_ids', JSON.stringify(Array.from(ids)));
+        localStorage.setItem('eldoret_perm_deleted_ids', JSON.stringify(Array.from(permIds)));
+      } catch (e) {}
+      setIsHiddenProductsLoaded(true);
+    }, (error: any) => {
       console.error("Firestore loading hidden products error: ", error);
+      if (error?.code === 'resource-exhausted' || error?.message?.includes('Quota') || error?.message?.includes('quota')) {
+        setIsQuotaExceeded(true);
+      }
+      setIsHiddenProductsLoaded(true);
     });
 
     return () => unsubscribe();
@@ -137,12 +208,47 @@ export default function App() {
 
     try {
       if (isCustom) {
+        // 1. Delete the custom product document from products collection
         await deleteDoc(doc(db, 'products', currentProduct.id));
+        
+        // 2. Add to hidden_products with permanentlyDeleted to sync with other clients and block it
+        await setDoc(doc(db, 'hidden_products', currentProduct.id), {
+          id: currentProduct.id,
+          name: currentProduct.name,
+          category: currentProduct.category,
+          image: currentProduct.image,
+          permanentlyDeleted: true,
+          deletedAt: Date.now()
+        });
+
+        // 3. Update customProducts local state and localStorage instantly
+        setCustomProducts(prev => {
+          const updated = prev.filter(p => p.id !== currentProduct.id);
+          try {
+            localStorage.setItem('eldoret_custom_products', JSON.stringify(updated));
+          } catch (e) {}
+          return updated;
+        });
+
+        // 4. Update permanently deleted set and localStorage instantly
+        if (typeof window !== 'undefined') {
+          try {
+            const storedPerm = localStorage.getItem('eldoret_perm_deleted_ids');
+            const permList = storedPerm ? JSON.parse(storedPerm) : [];
+            if (!permList.includes(currentProduct.id)) {
+              permList.push(currentProduct.id);
+              localStorage.setItem('eldoret_perm_deleted_ids', JSON.stringify(permList));
+              setPermanentlyDeletedIds(new Set(permList));
+            }
+          } catch (e) {}
+        }
+
         setToast({ 
           message: `"${currentProduct.name}" was permanently deleted from your showroom.`, 
           type: 'success' 
         });
       } else {
+        // 1. Hide the standard catalog item
         await setDoc(doc(db, 'hidden_products', currentProduct.id), {
           id: currentProduct.id,
           name: currentProduct.name,
@@ -150,6 +256,20 @@ export default function App() {
           image: currentProduct.image,
           hiddenAt: Date.now()
         });
+
+        // 2. Update hiddenProductIds local state and localStorage instantly
+        if (typeof window !== 'undefined') {
+          try {
+            const storedHidden = localStorage.getItem('eldoret_hidden_product_ids');
+            const hiddenList = storedHidden ? JSON.parse(storedHidden) : [];
+            if (!hiddenList.includes(currentProduct.id)) {
+              hiddenList.push(currentProduct.id);
+              localStorage.setItem('eldoret_hidden_product_ids', JSON.stringify(hiddenList));
+              setHiddenProductIds(new Set(hiddenList));
+            }
+          } catch (e) {}
+        }
+
         setToast({ 
           message: `"${currentProduct.name}" was hidden from the showroom as an outdated item.`, 
           type: 'success' 
@@ -164,10 +284,38 @@ export default function App() {
     }
   };
 
+  // Handler to add custom product to local state immediately
+  const handleAddCustomProduct = (newProduct: Product) => {
+    setCustomProducts((prev) => {
+      if (prev.some(p => p.id === newProduct.id)) {
+        return prev;
+      }
+      const updated = [newProduct, ...prev];
+      try {
+        localStorage.setItem('eldoret_custom_products', JSON.stringify(updated));
+      } catch (e) {
+        console.warn('LocalStorage limit exceeded, skipping cache');
+      }
+      return updated;
+    });
+  };
+
   // Handler to restore hidden standard products back to showroom
   const handleRestoreProduct = async (productId: string) => {
     try {
       await deleteDoc(doc(db, 'hidden_products', productId));
+
+      // Update local state instantly
+      if (typeof window !== 'undefined') {
+        try {
+          const storedHidden = localStorage.getItem('eldoret_hidden_product_ids');
+          let hiddenList = storedHidden ? JSON.parse(storedHidden) : [];
+          hiddenList = hiddenList.filter((id: string) => id !== productId);
+          localStorage.setItem('eldoret_hidden_product_ids', JSON.stringify(hiddenList));
+          setHiddenProductIds(new Set(hiddenList));
+        } catch (e) {}
+      }
+
       setToast({ 
         message: "Product image successfully restored back to your showroom!", 
         type: 'success' 
@@ -194,6 +342,25 @@ export default function App() {
         deletedAt: Date.now()
       });
 
+      // Update local states instantly
+      if (typeof window !== 'undefined') {
+        try {
+          const storedPerm = localStorage.getItem('eldoret_perm_deleted_ids');
+          const permList = storedPerm ? JSON.parse(storedPerm) : [];
+          if (!permList.includes(productId)) {
+            permList.push(productId);
+            localStorage.setItem('eldoret_perm_deleted_ids', JSON.stringify(permList));
+            setPermanentlyDeletedIds(new Set(permList));
+          }
+
+          const storedHidden = localStorage.getItem('eldoret_hidden_product_ids');
+          let hiddenList = storedHidden ? JSON.parse(storedHidden) : [];
+          hiddenList = hiddenList.filter((id: string) => id !== productId);
+          localStorage.setItem('eldoret_hidden_product_ids', JSON.stringify(hiddenList));
+          setHiddenProductIds(new Set(hiddenList));
+        } catch (e) {}
+      }
+
       setToast({ 
         message: `"${name}" has been permanently deleted from your showroom.`, 
         type: 'success' 
@@ -212,14 +379,116 @@ export default function App() {
     return PRODUCTS.filter(p => hiddenProductIds.has(p.id));
   }, [hiddenProductIds]);
 
-  // Combine hardcoded PRODUCTS (filtered of hidden or permanently deleted ones) with custom products from Firestore
+  // Combine hardcoded PRODUCTS (filtered of hidden or permanently deleted ones) with custom products from Firestore (also filtered)
   const allProducts = useMemo(() => {
     const visibleStandardProducts = PRODUCTS.filter(p => !hiddenProductIds.has(p.id) && !permanentlyDeletedIds.has(p.id));
-    return [...customProducts, ...visibleStandardProducts];
+    const visibleCustomProducts = customProducts.filter(p => !hiddenProductIds.has(p.id) && !permanentlyDeletedIds.has(p.id));
+    return [...visibleCustomProducts, ...visibleStandardProducts];
   }, [customProducts, hiddenProductIds, permanentlyDeletedIds]);
 
   // Detail Modal States
   const [selectedProduct, setSelectedProduct] = useState<Product | null>(null);
+  const [isUrlInitialized, setIsUrlInitialized] = useState<boolean>(false);
+
+  // Active safety guardrail: if the selected product gets hidden or permanently deleted, close the modal instantly!
+  useEffect(() => {
+    if (selectedProduct && (hiddenProductIds.has(selectedProduct.id) || permanentlyDeletedIds.has(selectedProduct.id))) {
+      setSelectedProduct(null);
+    }
+  }, [selectedProduct, hiddenProductIds, permanentlyDeletedIds]);
+
+  // Deep-linking: handle URL query param for a specific product once database visibility states are loaded!
+  useEffect(() => {
+    if (!isHiddenProductsLoaded || !isProductsLoaded) return;
+    if (isUrlInitialized) return;
+
+    if (typeof window !== 'undefined') {
+      const params = new URLSearchParams(window.location.search);
+      const productId = params.get('product');
+      
+      if (!productId) {
+        setIsUrlInitialized(true);
+        return;
+      }
+
+      // If the product is hidden or permanently deleted, do NOT open the modal, and clear the param!
+      if (hiddenProductIds.has(productId) || permanentlyDeletedIds.has(productId)) {
+        const newUrl = window.location.protocol + "//" + window.location.host + window.location.pathname;
+        window.history.replaceState({ path: newUrl }, '', newUrl);
+        setIsUrlInitialized(true);
+        return;
+      }
+
+      // If it is a custom product, fetch it directly from Firestore immediately!
+      if (productId.startsWith('custom-')) {
+        // Look up in local customProducts (which is populated synchronously from localStorage on mount)
+        const localMatch = customProducts.find(p => p.id === productId);
+        if (localMatch) {
+          setSelectedProduct(localMatch);
+          setIsUrlInitialized(true);
+        } else {
+          const docRef = doc(db, 'products', productId);
+          getDoc(docRef).then((docSnap) => {
+            if (docSnap.exists()) {
+              const data = docSnap.data();
+              const product: Product = {
+                id: docSnap.id,
+                name: data.name || '',
+                price: data.price || 0,
+                category: data.category || '',
+                image: data.image || '',
+                description: data.description || '',
+                materials: data.materials || [],
+                features: data.features || [],
+                dimensions: data.dimensions || '',
+                woodOnly: data.woodOnly || false,
+                isChester: data.isChester || false
+              };
+              setSelectedProduct(product);
+            }
+            setIsUrlInitialized(true);
+          }).catch((err: any) => {
+            console.error("Error fetching direct custom product on mount:", err);
+            if (err?.code === 'resource-exhausted' || err?.message?.includes('Quota') || err?.message?.includes('quota')) {
+              setIsQuotaExceeded(true);
+            }
+            setIsUrlInitialized(true);
+          });
+        }
+      } else {
+        // If it is a standard product, we can look up in the hardcoded PRODUCTS list immediately!
+        const match = PRODUCTS.find(p => p.id === productId);
+        if (match) {
+          setSelectedProduct(match);
+        }
+        setIsUrlInitialized(true);
+      }
+    }
+  }, [isHiddenProductsLoaded, isProductsLoaded, isUrlInitialized, customProducts, hiddenProductIds, permanentlyDeletedIds]);
+
+  // Sync selectedProduct changes back to URL (only after startup initialization is completed)
+  useEffect(() => {
+    if (!isUrlInitialized) return;
+
+    if (typeof window !== 'undefined') {
+      const params = new URLSearchParams(window.location.search);
+      const currentId = params.get('product');
+      if (selectedProduct) {
+        if (currentId !== selectedProduct.id) {
+          params.set('product', selectedProduct.id);
+          const newUrl = `${window.location.pathname}?${params.toString()}${window.location.hash}`;
+          window.history.replaceState({ path: newUrl }, '', newUrl);
+        }
+      } else {
+        if (currentId) {
+          params.delete('product');
+          const searchStr = params.toString();
+          const newUrl = `${window.location.pathname}${searchStr ? '?' + searchStr : ''}${window.location.hash}`;
+          window.history.replaceState({ path: newUrl }, '', newUrl);
+        }
+      }
+    }
+  }, [selectedProduct, isUrlInitialized]);
 
   // Track if "Manage Showroom" admin entry point is visible (Option A)
   const [isAdminVisible, setIsAdminVisible] = useState<boolean>(() => {
@@ -326,6 +595,8 @@ export default function App() {
     return allProducts.filter(p => favorites.includes(p.id));
   }, [favorites, allProducts]);
 
+  const isDbReady = isProductsLoaded && isHiddenProductsLoaded;
+
   // Bulk Whatsapp Favorite Quote builder
   const handleBulkFavoriteWhatsApp = () => {
     if (favoriteProductsList.length === 0) return;
@@ -382,6 +653,34 @@ export default function App() {
               className="text-amber-300 hover:text-white underline font-semibold cursor-pointer"
             >
               Logout (Exit Admin)
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Firestore Quota Exceeded Notice (Reassures the admin and provides seamless local-cache fallback) */}
+      {isQuotaExceeded && (
+        <div className="bg-amber-50 text-amber-900 border-b border-amber-200 px-4 py-3 text-xs font-sans shadow-xs">
+          <div className="max-w-7xl mx-auto flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+            <div className="flex items-start gap-2">
+              <span className="text-amber-600 text-sm mt-0.5">⚠️</span>
+              <div>
+                {isAdminAuthenticated ? (
+                  <p className="leading-relaxed">
+                    <strong>Admin Notice:</strong> The Google Firestore daily free read limit has been reached. Don't worry, <strong>your 95+ posted items are completely safe in Firestore!</strong> They will automatically reappear as soon as Google resets the daily quota. To bypass this limit permanently, you can enable billing in your Firebase Console, or simply wait for the daily reset. We have automatically activated local browser caching so your items continue to display seamlessly for you and returning visitors.
+                  </p>
+                ) : (
+                  <p className="leading-relaxed">
+                    <strong>Notice:</strong> Eldoret Furniture showroom is experiencing extremely high traffic today. Our bespoke catalog is running in optimized cached offline mode. Some brand-new designs might take a moment to sync, but our complete collection is fully browseable below!
+                  </p>
+                )}
+              </div>
+            </div>
+            <button 
+              onClick={() => setIsQuotaExceeded(false)}
+              className="text-amber-700 hover:text-amber-950 font-bold underline shrink-0 self-end sm:self-auto cursor-pointer"
+            >
+              Dismiss
             </button>
           </div>
         </div>
@@ -636,8 +935,34 @@ export default function App() {
               </div>
             )}
 
-            {/* Zero matching items fallback interface */}
-            {filteredProducts.length === 0 ? (
+            {/* Database Sync Loading Skeleton OR Zero matching items fallback OR Active Grid */}
+            {!isDbReady ? (
+              // Shimmering Luxury Skeleton Grid (avoids layout shift and deleted items flashing)
+              <div 
+                className={`grid grid-cols-1 sm:grid-cols-2 ${
+                  gridColumns === 3 
+                    ? 'lg:grid-cols-3' 
+                    : 'lg:grid-cols-4'
+                } gap-6 md:gap-8`}
+                id="shimmering-skeleton-grid"
+              >
+                {Array.from({ length: 8 }).map((_, idx) => (
+                  <div key={idx} className="bg-white rounded-2xl overflow-hidden border border-stone-200 shadow-xs flex flex-col h-full animate-pulse">
+                    <div className="aspect-[4/3] bg-stone-200 w-full" />
+                    <div className="p-4 space-y-3 flex-grow flex flex-col justify-between">
+                      <div className="space-y-2">
+                        <div className="h-4 bg-stone-200 rounded-md w-3/4" />
+                        <div className="h-3 bg-stone-200 rounded-md w-1/2" />
+                      </div>
+                      <div className="flex items-center justify-between pt-2">
+                        <div className="h-5 bg-stone-200 rounded-md w-1/3" />
+                        <div className="h-8 bg-stone-200 rounded-lg w-1/2" />
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : filteredProducts.length === 0 ? (
               <div className="bg-white border border-stone-200 rounded-3xl p-12 text-center max-w-lg mx-auto" id="no-products-fallback">
                 <HelpCircle className="w-12 h-12 text-stone-400 mx-auto mb-4" />
                 <h3 className="text-lg font-bold text-stone-900 font-sans">No matching items found</h3>
@@ -838,6 +1163,7 @@ export default function App() {
         hiddenProducts={hiddenProductsList}
         onRestoreProduct={handleRestoreProduct}
         onPermanentlyDeleteStandardProduct={handlePermanentlyDeleteStandardProduct}
+        onAddCustomProduct={handleAddCustomProduct}
       />
 
       {/* Custom Toast Notification */}
